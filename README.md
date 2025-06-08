@@ -7,6 +7,6 @@
 #### Running the Verification
 
 ```bash
-node files.js <your_sha1_file>
-node checksum.js <your_sha1_file>
+node __files.js <your_sha1_file>
+node __checksum.js <your_sha1_file>
 ```
