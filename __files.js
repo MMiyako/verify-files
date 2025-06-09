@@ -28,6 +28,8 @@ async function getFileList(dir, baseDir, excludeDir) {
 async function main() {
     try {
         const sha1File = process.argv[2];
+        const parsed = path.parse(sha1File);
+        const sha1FileName = parsed.name;
         const scriptDir = process.cwd();
         const parentDir = path.resolve(scriptDir, "..");
 
@@ -53,8 +55,8 @@ async function main() {
         const extra = actualFiles.filter((file) => !expectedSet.has(file));
 
         // Save results
-        await fs.writeFile("files_missing.txt", missing.join("\n"));
-        await fs.writeFile("files_extra.txt", extra.join("\n"));
+        await fs.writeFile(`_files_missing_${sha1FileName}.txt`, missing.join("\n"));
+        await fs.writeFile(`_files_extra_${sha1FileName}.txt`, extra.join("\n"));
 
         console.log(`Comparison complete.\n- Missing files: ${missing.length} (saved to files_missing)\n- Extra files: ${extra.length} (saved to files_extra)`);
 

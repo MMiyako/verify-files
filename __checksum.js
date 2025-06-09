@@ -43,6 +43,8 @@ function updateProgress(current, total, filename) {
 async function main() {
     try {
         const sha1File = process.argv[2];
+        const parsed = path.parse(sha1File);
+        const sha1FileName = parsed.name;
         const parentDir = path.resolve(process.cwd(), "..");
         const failedChecksums = [];
 
@@ -89,7 +91,7 @@ async function main() {
         }
 
         process.stdout.write("\r\x1b[K");
-        await fs.writeFile("checksum_failed.txt", failedChecksums.join("\n"));
+        await fs.writeFile(`_checksum_failed_${sha1FileName}.txt`, failedChecksums.join("\n"));
 
         console.log(`\n${colors.cyan}Verification complete.${colors.reset}`);
         console.log(
