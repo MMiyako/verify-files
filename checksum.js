@@ -1,4 +1,5 @@
 const fs = require("fs").promises;
+const { createReadStream } = require("fs"); // Added for large file support
 const path = require("path");
 const { execSync } = require("child_process");
 const { createHash } = require("crypto");
@@ -22,8 +23,24 @@ async function calculateSHA1(filePath, method) {
             const output = execSync(`sha1sum "${filePath}"`, { encoding: "utf-8" });
             return output.trim().split(/\s+/)[0].substring(1, 11);
         } else {
-            const fileBuffer = await fs.readFile(filePath);
-            return createHash("sha1").update(fileBuffer).digest("hex").substring(0, 10);
+            // Use streams instead of readFile to handle large files (>2GB)
+            return new Promise((resolve, reject) => {
+                const hash = createHash("sha1");
+                const stream = createReadStream(filePath);
+
+                stream.on("data", (chunk) => {
+                    hash.update(chunk);
+                });
+
+                stream.on("end", () => {
+                    // Match the original logic: hex digest, first 10 characters
+                    resolve(hash.digest("hex").substring(0, 10));
+                });
+
+                stream.on("error", (err) => {
+                    reject(err);
+                });
+            });
         }
     } catch (error) {
         console.error(`\n${colors.red}Error calculating hash for ${filePath}:${colors.reset}`, error.message);
