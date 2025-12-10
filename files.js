@@ -11,7 +11,28 @@ const colors = {
     gray: "\x1b[90m",
 };
 
-async function getFileList(dir, baseDir, ignoreDirsSet, ignoreFilesSet) {
+function processIgnoreList(rawList, rootDir) {
+    const names = new Set();
+    const paths = new Set();
+
+    rawList.forEach(item => {
+        // specific check: if it contains separators, treat as path
+        if (item.includes("/") || item.includes("\\")) {
+            // Resolve to absolute path
+            // If item is already absolute, path.resolve(root, item) returns item (on standard OS behavior)
+            // If item is relative, it joins root + item
+            const absPath = path.resolve(rootDir, item);
+            paths.add(absPath);
+        } else {
+            // No separators, treat as a generic name to ignore everywhere
+            names.add(item);
+        }
+    });
+
+    return { names, paths };
+}
+
+async function getFileList(dir, baseDir, ignoreRules) {
     let files = [];
     
     try {
@@ -21,15 +42,30 @@ async function getFileList(dir, baseDir, ignoreDirsSet, ignoreFilesSet) {
             const fullPath = path.join(dir, item.name);
 
             if (item.isDirectory()) {
-                // CHECK IGNORE DIRECTORY (-d)
-                if (ignoreDirsSet.has(item.name)) {
+                // --- IGNORE DIRECTORY CHECKS ---
+                
+                // 1. Check by Name (e.g. "node_modules")
+                if (ignoreRules.dirNames.has(item.name)) {
                     continue; 
                 }
+
+                // 2. Check by Specific Path (e.g. "C:\Project\node_modules")
+                if (ignoreRules.dirPaths.has(fullPath)) {
+                    continue;
+                }
                 
-                files = files.concat(await getFileList(fullPath, baseDir, ignoreDirsSet, ignoreFilesSet));
+                // Recurse
+                files = files.concat(await getFileList(fullPath, baseDir, ignoreRules));
             } else {
-                // CHECK IGNORE FILE (-f)
-                if (ignoreFilesSet.has(item.name)) {
+                // --- IGNORE FILE CHECKS ---
+
+                // 1. Check by Name (e.g. ".DS_Store")
+                if (ignoreRules.fileNames.has(item.name)) {
+                    continue;
+                }
+
+                // 2. Check by Specific Path (e.g. "C:\Project\.DS_Store")
+                if (ignoreRules.filePaths.has(fullPath)) {
                     continue;
                 }
 
@@ -48,13 +84,10 @@ async function getFileList(dir, baseDir, ignoreDirsSet, ignoreFilesSet) {
 async function deleteFileIfExists(filePath) {
     try {
         await fs.unlink(filePath);
-        return true; // Deleted
+        return true; 
     } catch (error) {
-        // If error is anything other than "file not found", throw it
-        if (error.code !== 'ENOENT') {
-            throw error;
-        }
-        return false; // Did not exist
+        if (error.code !== 'ENOENT') throw error;
+        return false; 
     }
 }
 
@@ -63,32 +96,30 @@ async function main() {
         const args = process.argv.slice(2);
         
         const positionalArgs = []; 
-        const ignoreDirs = [];     
-        const ignoreFiles = [];
+        const rawIgnoreDirs = [];     
+        const rawIgnoreFiles = [];
 
-        // --- CUSTOM ARGUMENT PARSER ---
+        // --- ARGUMENT PARSER ---
         for (let i = 0; i < args.length; i++) {
             const arg = args[i];
 
-            // IGNORE DIRECTORY: -d or --ignore-dir
             if (arg === "--ignore-dir" || arg === "-d") {
                 const nextArg = args[i + 1];
                 if (nextArg && !nextArg.startsWith("-")) {
-                    ignoreDirs.push(nextArg);
+                    rawIgnoreDirs.push(nextArg);
                     i++; 
                 } else {
-                    console.error(`${colors.red}Error: -d flag requires a folder name.${colors.reset}`);
+                    console.error(`${colors.red}Error: -d flag requires a folder name or path.${colors.reset}`);
                     process.exit(1);
                 }
             } 
-            // IGNORE FILE: -f or --ignore-file
             else if (arg === "--ignore-file" || arg === "-f") {
                 const nextArg = args[i + 1];
                 if (nextArg && !nextArg.startsWith("-")) {
-                    ignoreFiles.push(nextArg);
+                    rawIgnoreFiles.push(nextArg);
                     i++; 
                 } else {
-                    console.error(`${colors.red}Error: -f flag requires a file name.${colors.reset}`);
+                    console.error(`${colors.red}Error: -f flag requires a file name or path.${colors.reset}`);
                     process.exit(1);
                 }
             } 
@@ -101,8 +132,8 @@ async function main() {
             console.log("Usage:");
             console.log("  node files.js <sha1File> [targetDir] [options]");
             console.log("\nOptions:");
-            console.log("  -d, --ignore-dir <name>   Ignore a directory");
-            console.log("  -f, --ignore-file <name>  Ignore a file");
+            console.log("  -d <name|path>   Ignore directory (e.g. 'config' or 'sql/config')");
+            console.log("  -f <name|path>   Ignore file (e.g. '.env' or 'tests/setup.js')");
             process.exit(1);
         }
 
@@ -111,13 +142,22 @@ async function main() {
 
         const sha1FilePath = path.resolve(sha1File);
         const sha1Dir = path.dirname(sha1FilePath);
+        // Default target dir is SHA1 file's dir if not provided
         const targetDir = targetDirArg ? path.resolve(targetDirArg) : sha1Dir;
         const parsed = path.parse(sha1FilePath);
         const sha1FileName = parsed.name;
 
-        // Create Sets
-        const ignoreDirsSet = new Set(ignoreDirs);
-        const ignoreFilesSet = new Set(ignoreFiles);
+        // --- PROCESS IGNORE RULES ---
+        // We split the raw input into "Names" (match anywhere) and "Paths" (match exact location)
+        const dirs = processIgnoreList(rawIgnoreDirs, targetDir);
+        const files = processIgnoreList(rawIgnoreFiles, targetDir);
+
+        const ignoreRules = {
+            dirNames: dirs.names,
+            dirPaths: dirs.paths,
+            fileNames: files.names,
+            filePaths: files.paths
+        };
 
         const sha1Data = await fs.readFile(sha1FilePath, "utf8");
         const expectedFiles = sha1Data
@@ -131,59 +171,49 @@ async function main() {
         console.log(`${colors.cyan}SHA1 file:${colors.reset} ${sha1FilePath}`);
         console.log(`${colors.cyan}Target directory:${colors.reset} ${targetDir}`);
 
-        if (ignoreDirsSet.size > 0) {
+        // --- DISPLAY CONFIGURATION ---
+        if (ignoreRules.dirNames.size > 0 || ignoreRules.dirPaths.size > 0) {
             console.log(`${colors.cyan}Ignoring Directories:${colors.reset}`);
-            ignoreDirsSet.forEach(item => console.log(`  - ${item}`));
+            ignoreRules.dirNames.forEach(n => console.log(`  - [Name] ${n}`));
+            ignoreRules.dirPaths.forEach(p => console.log(`  - [Path] ${path.relative(targetDir, p)}`));
         }
-        if (ignoreFilesSet.size > 0) {
+        if (ignoreRules.fileNames.size > 0 || ignoreRules.filePaths.size > 0) {
             console.log(`${colors.cyan}Ignoring Files:${colors.reset}`);
-            ignoreFilesSet.forEach(item => console.log(`  - ${item}`));
+            ignoreRules.fileNames.forEach(n => console.log(`  - [Name] ${n}`));
+            ignoreRules.filePaths.forEach(p => console.log(`  - [Path] ${path.relative(targetDir, p)}`));
         }
 
         console.log(`${colors.cyan}Expected files in SHA1:${colors.reset} ${expectedFiles.length}\n`);
 
-        const actualFiles = await getFileList(targetDir, targetDir, ignoreDirsSet, ignoreFilesSet);
+        const actualFiles = await getFileList(targetDir, targetDir, ignoreRules);
         
         const expectedSet = new Set(expectedFiles);
         const actualSet = new Set(actualFiles);
         const missing = expectedFiles.filter((file) => !actualSet.has(file));
         const extra = actualFiles.filter((file) => !expectedSet.has(file));
 
-        // Define paths for report files
         const missingFilePath = path.join(sha1Dir, `${sha1FileName}_missing_files.txt`);
         const extraFilePath = path.join(sha1Dir, `${sha1FileName}_extra_files.txt`);
 
-        // --- HANDLE MISSING FILES REPORT ---
+        // --- REPORTS ---
         if (missing.length > 0) {
             await fs.writeFile(missingFilePath, missing.join("\n"));
             console.log(`${colors.yellow}- Missing: ${missing.length} (saved to ${path.basename(missingFilePath)})${colors.reset}`);
         } else {
-            // Cleanup: Delete file if it exists from previous run
             const wasDeleted = await deleteFileIfExists(missingFilePath);
-            if (wasDeleted) {
-                console.log(`${colors.green}- Missing: 0 (Old report file deleted)${colors.reset}`);
-            } else {
-                console.log(`${colors.green}- Missing: 0${colors.reset}`);
-            }
+            console.log(`${colors.green}- Missing: 0${wasDeleted ? " (Old report deleted)" : ""}${colors.reset}`);
         }
 
-        // --- HANDLE EXTRA FILES REPORT ---
         if (extra.length > 0) {
             await fs.writeFile(extraFilePath, extra.join("\n"));
             console.log(`${colors.yellow}- Extra: ${extra.length} (saved to ${path.basename(extraFilePath)})${colors.reset}`);
         } else {
-            // Cleanup: Delete file if it exists from previous run
             const wasDeleted = await deleteFileIfExists(extraFilePath);
-            if (wasDeleted) {
-                console.log(`${colors.green}- Extra: 0 (Old report file deleted)${colors.reset}`);
-            } else {
-                console.log(`${colors.green}- Extra: 0${colors.reset}`);
-            }
+            console.log(`${colors.green}- Extra: 0${wasDeleted ? " (Old report deleted)" : ""}${colors.reset}`);
         }
 
         console.log(`${colors.green}Comparison complete.${colors.reset}`);
 
-        // Debug output samples
         if (missing.length > 0) {
             console.log(`\n${colors.red}Sample missing:${colors.reset}`);
             missing.slice(0, 5).forEach((file) => console.log(`  ${file}`));
