@@ -120,7 +120,13 @@ async function main() {
         }
 
         process.stdout.write("\r\x1b[K");
-        await fs.writeFile(`_checksum_failed_${sha1FileName}.txt`, failedChecksums.join("\n"));
+
+        // Define path relative to the input file directory
+        const outputFilePath = path.join(sha1Dir, `${sha1FileName}_checksum_failed.txt`);
+
+        if (failedChecksums.length > 0) {
+            await fs.writeFile(outputFilePath, failedChecksums.join("\n"));
+        }
 
         console.log(`\n${colors.cyan}Verification complete.${colors.reset}`);
         console.log(
@@ -132,7 +138,7 @@ async function main() {
         if (failedChecksums.length > 0) {
             console.log(`\n${colors.yellow}Sample mismatches:${colors.reset}`);
             console.log(failedChecksums.slice(0, 5).join("\n"));
-            console.log(`${colors.gray}Full list saved to _checksum_failed_${sha1FileName}.txt${colors.reset}`);
+            console.log(`${colors.gray}Full list saved to: ${outputFilePath}${colors.reset}`);
         }
     } catch (error) {
         console.error(`\n${colors.red}Error:${colors.reset}`, error.message);
