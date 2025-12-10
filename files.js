@@ -44,6 +44,20 @@ async function getFileList(dir, baseDir, ignoreDirsSet, ignoreFilesSet) {
     return files;
 }
 
+// Helper to safely delete file if it exists
+async function deleteFileIfExists(filePath) {
+    try {
+        await fs.unlink(filePath);
+        return true; // Deleted
+    } catch (error) {
+        // If error is anything other than "file not found", throw it
+        if (error.code !== 'ENOENT') {
+            throw error;
+        }
+        return false; // Did not exist
+    }
+}
+
 async function main() {
     try {
         const args = process.argv.slice(2);
@@ -89,8 +103,6 @@ async function main() {
             console.log("\nOptions:");
             console.log("  -d, --ignore-dir <name>   Ignore a directory");
             console.log("  -f, --ignore-file <name>  Ignore a file");
-            console.log("\nExamples:");
-            console.log("  node files.js list.sha1 . -d config -f .env");
             process.exit(1);
         }
 
@@ -137,22 +149,41 @@ async function main() {
         const missing = expectedFiles.filter((file) => !actualSet.has(file));
         const extra = actualFiles.filter((file) => !expectedSet.has(file));
 
-        const missingFile = `${sha1FileName}_missing_files.txt`;
-        const extraFile = `${sha1FileName}_extra_files.txt`;
+        // Define paths for report files
+        const missingFilePath = path.join(sha1Dir, `${sha1FileName}_missing_files.txt`);
+        const extraFilePath = path.join(sha1Dir, `${sha1FileName}_extra_files.txt`);
 
-        if (missing.length > 0) await fs.writeFile(path.join(sha1Dir, missingFile), missing.join("\n"));
-        if (extra.length > 0) await fs.writeFile(path.join(sha1Dir, extraFile), extra.join("\n"));
+        // --- HANDLE MISSING FILES REPORT ---
+        if (missing.length > 0) {
+            await fs.writeFile(missingFilePath, missing.join("\n"));
+            console.log(`${colors.yellow}- Missing: ${missing.length} (saved to ${path.basename(missingFilePath)})${colors.reset}`);
+        } else {
+            // Cleanup: Delete file if it exists from previous run
+            const wasDeleted = await deleteFileIfExists(missingFilePath);
+            if (wasDeleted) {
+                console.log(`${colors.green}- Missing: 0 (Old report file deleted)${colors.reset}`);
+            } else {
+                console.log(`${colors.green}- Missing: 0${colors.reset}`);
+            }
+        }
+
+        // --- HANDLE EXTRA FILES REPORT ---
+        if (extra.length > 0) {
+            await fs.writeFile(extraFilePath, extra.join("\n"));
+            console.log(`${colors.yellow}- Extra: ${extra.length} (saved to ${path.basename(extraFilePath)})${colors.reset}`);
+        } else {
+            // Cleanup: Delete file if it exists from previous run
+            const wasDeleted = await deleteFileIfExists(extraFilePath);
+            if (wasDeleted) {
+                console.log(`${colors.green}- Extra: 0 (Old report file deleted)${colors.reset}`);
+            } else {
+                console.log(`${colors.green}- Extra: 0${colors.reset}`);
+            }
+        }
 
         console.log(`${colors.green}Comparison complete.${colors.reset}`);
-        
-        missing.length > 0 
-            ? console.log(`${colors.yellow}- Missing: ${missing.length} (see ${missingFile})${colors.reset}`)
-            : console.log(`${colors.green}- Missing: 0${colors.reset}`);
 
-        extra.length > 0 
-            ? console.log(`${colors.yellow}- Extra: ${extra.length} (see ${extraFile})${colors.reset}`)
-            : console.log(`${colors.green}- Extra: 0${colors.reset}`);
-
+        // Debug output samples
         if (missing.length > 0) {
             console.log(`\n${colors.red}Sample missing:${colors.reset}`);
             missing.slice(0, 5).forEach((file) => console.log(`  ${file}`));
