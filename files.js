@@ -16,43 +16,25 @@ const colors = {
  * into a JavaScript RegExp.
  */
 function globToRegex(glob) {
-    // 1. Escape special regex characters (except *)
-    // We escape: . + ? ^ $ { } ( ) | [ ] \
     let regexString = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-
-    // 2. Convert wildcard '*' to regex '.*'
     regexString = regexString.replace(/\*/g, ".*");
-
-    // 3. Anchor start and end to ensure full match
-    return new RegExp(`^${regexString}$`, "i"); // 'i' flag for case-insensitive matching
+    return new RegExp(`^${regexString}$`, "i");
 }
 
-/**
- * Normalizes paths to use forward slashes consistently.
- * Important for matching patterns across Windows/Linux.
- */
 function normalizePath(p) {
     return p.replace(/\\/g, "/");
 }
 
-/**
- * Categorizes and compiles ignore patterns.
- */
 function processIgnoreList(rawList, rootDir) {
-    const namePatterns = []; // For "config*", "*.js"
-    const pathPatterns = []; // For "app/config*", "src/*.js"
+    const namePatterns = [];
+    const pathPatterns = [];
 
     rawList.forEach((item) => {
-        // Normalize input immediately
         const normalizedItem = normalizePath(item);
-
-        // If it contains a slash, it's a specific PATH pattern
         if (normalizedItem.includes("/")) {
-            // Resolve to absolute path, then normalize again
             const absPath = normalizePath(path.resolve(rootDir, item));
             pathPatterns.push(globToRegex(absPath));
         } else {
-            // No slash, it's a generic NAME pattern
             namePatterns.push(globToRegex(normalizedItem));
         }
     });
@@ -60,7 +42,7 @@ function processIgnoreList(rawList, rootDir) {
     return { namePatterns, pathPatterns };
 }
 
-async function getFileList(dir, baseDir, ignoreRules) {
+async function getFileList(dir, baseDir, ignoreRules, ignoredLog) {
     let files = [];
 
     try {
@@ -69,37 +51,47 @@ async function getFileList(dir, baseDir, ignoreRules) {
         for (const item of items) {
             const fullPath = path.join(dir, item.name);
             const normalizedFullPath = normalizePath(fullPath);
+            const relativePath = normalizePath(path.relative(baseDir, fullPath));
 
             if (item.isDirectory()) {
                 // --- IGNORE DIRECTORY CHECKS ---
+                let isIgnored = false;
 
-                // 1. Check by Name Pattern (e.g. "config*", "test_*")
+                // 1. Check by Name Pattern
                 if (ignoreRules.dirNames.some((regex) => regex.test(item.name))) {
-                    continue;
+                    isIgnored = true;
+                }
+                // 2. Check by Path Pattern
+                else if (ignoreRules.dirPaths.some((regex) => regex.test(normalizedFullPath))) {
+                    isIgnored = true;
                 }
 
-                // 2. Check by Path Pattern (e.g. "app/config*")
-                if (ignoreRules.dirPaths.some((regex) => regex.test(normalizedFullPath))) {
+                if (isIgnored) {
+                    ignoredLog.dirs.push(relativePath); // <--- Log it
                     continue;
                 }
 
                 // Recurse
-                files = files.concat(await getFileList(fullPath, baseDir, ignoreRules));
+                files = files.concat(await getFileList(fullPath, baseDir, ignoreRules, ignoredLog));
             } else {
                 // --- IGNORE FILE CHECKS ---
+                let isIgnored = false;
 
-                // 1. Check by Name Pattern (e.g. "*.js", "*.log")
+                // 1. Check by Name Pattern
                 if (ignoreRules.fileNames.some((regex) => regex.test(item.name))) {
+                    isIgnored = true;
+                }
+                // 2. Check by Path Pattern
+                else if (ignoreRules.filePaths.some((regex) => regex.test(normalizedFullPath))) {
+                    isIgnored = true;
+                }
+
+                if (isIgnored) {
+                    ignoredLog.files.push(relativePath); // <--- Log it
                     continue;
                 }
 
-                // 2. Check by Path Pattern (e.g. "app/*.js")
-                if (ignoreRules.filePaths.some((regex) => regex.test(normalizedFullPath))) {
-                    continue;
-                }
-
-                const relativePath = path.relative(baseDir, fullPath);
-                files.push(normalizePath(relativePath));
+                files.push(relativePath);
             }
         }
     } catch (error) {
@@ -109,7 +101,6 @@ async function getFileList(dir, baseDir, ignoreRules) {
     return files;
 }
 
-// Helper to safely delete file if it exists
 async function deleteFileIfExists(filePath) {
     try {
         await fs.unlink(filePath);
@@ -166,14 +157,12 @@ async function main() {
 
         const sha1File = positionalArgs[0];
         const targetDirArg = positionalArgs[1];
-
         const sha1FilePath = path.resolve(sha1File);
         const sha1Dir = path.dirname(sha1FilePath);
         const targetDir = targetDirArg ? path.resolve(targetDirArg) : sha1Dir;
         const parsed = path.parse(sha1FilePath);
         const sha1FileName = parsed.name;
 
-        // --- PROCESS IGNORE RULES ---
         const dirs = processIgnoreList(rawIgnoreDirs, targetDir);
         const files = processIgnoreList(rawIgnoreFiles, targetDir);
 
@@ -193,22 +182,22 @@ async function main() {
                 return normalizePath(filePath);
             });
 
-        console.log(`${colors.cyan}SHA1 file:${colors.reset} ${sha1FilePath}`);
+        console.log(`\n${colors.cyan}SHA1 file:${colors.reset} ${sha1FilePath}`);
         console.log(`${colors.cyan}Target directory:${colors.reset} ${targetDir}`);
+        console.log(`${colors.cyan}Expected files in SHA1:${colors.reset} ${expectedFiles.length}\n`);
 
-        // --- DISPLAY CONFIGURATION ---
         if (rawIgnoreDirs.length > 0) {
-            console.log(`${colors.cyan}Ignoring Directories:${colors.reset}`);
+            console.log(`${colors.cyan}Ignore Rules (Dir):${colors.reset}`);
             rawIgnoreDirs.forEach((p) => console.log(`  - ${p}`));
         }
         if (rawIgnoreFiles.length > 0) {
-            console.log(`${colors.cyan}Ignoring Files:${colors.reset}`);
+            console.log(`${colors.cyan}Ignore Rules (File):${colors.reset}`);
             rawIgnoreFiles.forEach((p) => console.log(`  - ${p}`));
         }
 
-        console.log(`${colors.cyan}Expected files in SHA1:${colors.reset} ${expectedFiles.length}\n`);
+        const ignoredLog = { dirs: [], files: [] };
 
-        const actualFiles = await getFileList(targetDir, targetDir, ignoreRules);
+        const actualFiles = await getFileList(targetDir, targetDir, ignoreRules, ignoredLog);
 
         const expectedSet = new Set(expectedFiles);
         const actualSet = new Set(actualFiles);
@@ -219,6 +208,21 @@ async function main() {
         const extraFilePath = path.join(sha1Dir, `${sha1FileName}_extra_files.txt`);
 
         // --- REPORTS ---
+        console.log(`\n${colors.gray}------------------------------------------------------------${colors.reset}`);
+
+        if (ignoredLog.dirs.length > 0 || ignoredLog.files.length > 0) {
+            if (ignoredLog.dirs.length > 0) {
+                console.log(`${colors.cyan}Folders Skipped:${colors.reset}`);
+                ignoredLog.dirs.forEach((d) => console.log(`  [DIR]  ${d}`));
+            }
+
+            if (ignoredLog.files.length > 0) {
+                console.log(`${colors.cyan}Files Skipped:${colors.reset}`);
+                ignoredLog.files.forEach((f) => console.log(`  [FILE] ${f}`));
+            }
+            console.log("\n");
+        }
+
         if (missing.length > 0) {
             await fs.writeFile(missingFilePath, missing.join("\n"));
             console.log(
@@ -241,8 +245,6 @@ async function main() {
             console.log(`${colors.green}- Extra: 0${wasDeleted ? " (Old report deleted)" : ""}${colors.reset}`);
         }
 
-        console.log(`${colors.green}Comparison complete.${colors.reset}`);
-
         if (missing.length > 0) {
             console.log(`\n${colors.red}Sample missing:${colors.reset}`);
             missing.slice(0, 5).forEach((file) => console.log(`  ${file}`));
@@ -251,6 +253,10 @@ async function main() {
             console.log(`\n${colors.red}Sample extra:${colors.reset}`);
             extra.slice(0, 5).forEach((file) => console.log(`  ${file}`));
         }
+
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}\n`);
+
+        console.log(`${colors.green}Comparison complete${colors.reset}`);
     } catch (error) {
         console.error(`${colors.red}Error:${colors.reset}`, error.message);
         process.exit(1);
