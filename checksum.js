@@ -7,7 +7,6 @@ const { createHash } = require("crypto");
 // "sha1sum" or "nodejs"
 const method = "nodejs";
 
-// Colors for terminal output
 const colors = {
     reset: "\x1b[0m",
     cyan: "\x1b[36m",
@@ -33,7 +32,6 @@ async function calculateSHA1(filePath, method) {
                 });
 
                 stream.on("end", () => {
-                    // Match the original logic: hex digest, first 10 characters
                     resolve(hash.digest("hex").substring(0, 10));
                 });
 
@@ -59,23 +57,24 @@ function updateProgress(current, total, filename) {
 
 async function main() {
     try {
-        const sha1File = process.argv[2];
-        const targetDirArg = process.argv[3]; // Optional second argument
+        if (process.argv.length < 3) {
+            console.log("Usage: node checksum.js <sha1_file> [target_directory]");
+            process.exit(1);
+        }
 
-        // Resolve SHA1 file path
+        const sha1File = process.argv[2];
+        const targetDirArg = process.argv[3];
+
         const sha1FilePath = path.resolve(sha1File);
         const sha1Dir = path.dirname(sha1FilePath);
-
-        // Determine target directory:
-        // 1. Use the provided target directory if given
-        // 2. Otherwise, use the SHA1 file's directory
         const targetDir = targetDirArg ? path.resolve(targetDirArg) : sha1Dir;
 
         const parsed = path.parse(sha1FilePath);
         const sha1FileName = parsed.name;
-        const failedChecksums = [];
 
-        // Read and parse SHA1 file
+        const mismatches = [];
+        const missingFiles = [];
+
         const sha1Data = await fs.readFile(sha1FilePath, "utf8");
         const entries = sha1Data
             .split("\n")
@@ -97,10 +96,11 @@ async function main() {
 
             try {
                 await fs.access(fullPath);
+
                 const actualHash = await calculateSHA1(fullPath, method);
 
                 if (!actualHash) {
-                    failedChecksums.push(`${entry.filePath} (hash calculation failed)`);
+                    mismatches.push(`${entry.filePath} (hash calculation failed)`);
                     continue;
                 }
 
@@ -108,37 +108,76 @@ async function main() {
                 const normalizedExpected = entry.expectedHash.toLowerCase();
 
                 if (normalizedActual !== normalizedExpected) {
-                    failedChecksums.push(`${entry.filePath} (expected ${normalizedExpected}, got ${normalizedActual})`);
+                    mismatches.push(`${entry.filePath} (expected ${normalizedExpected}, got ${normalizedActual})`);
                 }
             } catch (error) {
                 if (error.code === "ENOENT") {
-                    failedChecksums.push(`${entry.filePath} (file not found)`);
+                    missingFiles.push(entry.filePath);
                 } else {
-                    failedChecksums.push(`${entry.filePath} (error: ${error.message})`);
+                    mismatches.push(`${entry.filePath} (error: ${error.message})`);
                 }
             }
         }
 
-        process.stdout.write("\r\x1b[K");
+        process.stdout.write("\r\x1b[K\r\x1b[1A\x1b[K"); // Clear progress
 
-        // Define path relative to the input file directory
         const outputFilePath = path.join(sha1Dir, `${sha1FileName}_checksum_failed.txt`);
+        const reportLines = [];
 
-        if (failedChecksums.length > 0) {
-            await fs.writeFile(outputFilePath, failedChecksums.join("\n"));
+        if (mismatches.length > 0) {
+            reportLines.push("=== HASH MISMATCHES / ERRORS ===");
+            reportLines.push(...mismatches);
+            reportLines.push(""); // Spacing
         }
 
-        console.log(`\n${colors.cyan}Verification complete.${colors.reset}`);
-        console.log(
-            `${failedChecksums.length ? colors.red : colors.green}Found ${failedChecksums.length} mismatches.${
-                colors.reset
-            }`
-        );
+        if (missingFiles.length > 0) {
+            reportLines.push("=== MISSING FILES ===");
+            reportLines.push(...missingFiles);
+        }
 
-        if (failedChecksums.length > 0) {
-            console.log(`\n${colors.yellow}Sample mismatches:${colors.reset}`);
-            console.log(failedChecksums.slice(0, 5).join("\n"));
-            console.log(`${colors.gray}Full list saved to: ${outputFilePath}${colors.reset}`);
+        let fileActionMsg = "";
+
+        if (reportLines.length > 0) {
+            await fs.writeFile(outputFilePath, reportLines.join("\n"));
+            fileActionMsg = `\n${colors.yellow}Full report saved to: ${outputFilePath}${colors.reset}`;
+        } else {
+            try {
+                await fs.unlink(outputFilePath);
+                // If we reach here, deletion was successful
+                fileActionMsg = `\n${colors.yellow}[*] Deleted old report file: ${outputFilePath}${colors.reset}`;
+            } catch (err) {
+                // If error is ENOENT (File not found), we do nothing and print nothing
+                if (err.code !== "ENOENT") {
+                    throw err; // Throw other errors (permissions, etc)
+                }
+            }
+        }
+
+        console.log(`\n${colors.green}Verification complete${colors.reset}`);
+
+        if (mismatches.length === 0 && missingFiles.length === 0) {
+            console.log(`\n${colors.green}All checks passed. No errors found.${colors.reset}`);
+        } else {
+            if (mismatches.length > 0) {
+                console.log(`\n${colors.red}[!] Found ${mismatches.length} hash mismatches${colors.reset}`);
+                console.log(`${colors.gray}Sample mismatches:${colors.reset}`);
+                // Use the raw array, NOT reportLines, to avoid printing headers
+                console.log(mismatches.slice(0, 5).join("\n"));
+                if (mismatches.length > 5) console.log("...");
+            }
+
+            if (missingFiles.length > 0) {
+                console.log(`\n${colors.red}[!] Found ${missingFiles.length} missing files${colors.reset}`);
+                console.log(`${colors.gray}Sample missing files:${colors.reset}`);
+                // Use the raw array, NOT reportLines
+                console.log(missingFiles.slice(0, 5).join("\n"));
+                if (missingFiles.length > 5) console.log("...");
+            }
+        }
+
+        // Print the file action message (Saved new file OR Deleted old file OR Nothing)
+        if (fileActionMsg) {
+            console.log(fileActionMsg);
         }
     } catch (error) {
         console.error(`\n${colors.red}Error:${colors.reset}`, error.message);
