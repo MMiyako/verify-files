@@ -25,7 +25,7 @@ function normalizePath(p) {
     return p.replace(/\\/g, "/");
 }
 
-function processIgnoreList(rawList, rootDir) {
+function processExcludeList(rawList, rootDir) {
     const namePatterns = [];
     const pathPatterns = [];
 
@@ -42,7 +42,7 @@ function processIgnoreList(rawList, rootDir) {
     return { namePatterns, pathPatterns };
 }
 
-async function getFileList(dir, baseDir, ignoreRules, ignoredLog) {
+async function getFileList(dir, baseDir, excludeRules, excludedLog) {
     let files = [];
 
     try {
@@ -54,40 +54,40 @@ async function getFileList(dir, baseDir, ignoreRules, ignoredLog) {
             const relativePath = normalizePath(path.relative(baseDir, fullPath));
 
             if (item.isDirectory()) {
-                // --- IGNORE DIRECTORY CHECKS ---
-                let isIgnored = false;
+                // --- EXCLUDE DIRECTORY CHECKS ---
+                let isExcluded = false;
 
                 // 1. Check by Name Pattern
-                if (ignoreRules.dirNames.some((regex) => regex.test(item.name))) {
-                    isIgnored = true;
+                if (excludeRules.dirNames.some((regex) => regex.test(item.name))) {
+                    isExcluded = true;
                 }
                 // 2. Check by Path Pattern
-                else if (ignoreRules.dirPaths.some((regex) => regex.test(normalizedFullPath))) {
-                    isIgnored = true;
+                else if (excludeRules.dirPaths.some((regex) => regex.test(normalizedFullPath))) {
+                    isExcluded = true;
                 }
 
-                if (isIgnored) {
-                    ignoredLog.dirs.push(relativePath); // <--- Log it
+                if (isExcluded) {
+                    excludedLog.dirs.push(relativePath); // <--- Log it
                     continue;
                 }
 
                 // Recurse
-                files = files.concat(await getFileList(fullPath, baseDir, ignoreRules, ignoredLog));
+                files = files.concat(await getFileList(fullPath, baseDir, excludeRules, excludedLog));
             } else {
-                // --- IGNORE FILE CHECKS ---
-                let isIgnored = false;
+                // --- EXCLUDE FILE CHECKS ---
+                let isExcluded = false;
 
                 // 1. Check by Name Pattern
-                if (ignoreRules.fileNames.some((regex) => regex.test(item.name))) {
-                    isIgnored = true;
+                if (excludeRules.fileNames.some((regex) => regex.test(item.name))) {
+                    isExcluded = true;
                 }
                 // 2. Check by Path Pattern
-                else if (ignoreRules.filePaths.some((regex) => regex.test(normalizedFullPath))) {
-                    isIgnored = true;
+                else if (excludeRules.filePaths.some((regex) => regex.test(normalizedFullPath))) {
+                    isExcluded = true;
                 }
 
-                if (isIgnored) {
-                    ignoredLog.files.push(relativePath); // <--- Log it
+                if (isExcluded) {
+                    excludedLog.files.push(relativePath); // <--- Log it
                     continue;
                 }
 
@@ -116,29 +116,29 @@ async function main() {
         const args = process.argv.slice(2);
 
         const positionalArgs = [];
-        const rawIgnoreDirs = [];
-        const rawIgnoreFiles = [];
+        const rawExcludeDirs = [];
+        const rawExcludeFiles = [];
 
         // --- ARGUMENT PARSER ---
         for (let i = 0; i < args.length; i++) {
             const arg = args[i];
 
-            if (arg === "--ignore-dir" || arg === "-d") {
+            if (arg === "--exclude-dir" || arg === "-xd") {
                 const nextArg = args[i + 1];
                 if (nextArg && !nextArg.startsWith("-")) {
-                    rawIgnoreDirs.push(nextArg);
+                    rawExcludeDirs.push(nextArg);
                     i++;
                 } else {
-                    console.error(`${colors.red}Error: -d flag requires a folder name/pattern.${colors.reset}`);
+                    console.error(`${colors.red}Error: -xd flag requires a folder name/pattern.${colors.reset}`);
                     process.exit(1);
                 }
-            } else if (arg === "--ignore-file" || arg === "-f") {
+            } else if (arg === "--exclude-file" || arg === "-xf") {
                 const nextArg = args[i + 1];
                 if (nextArg && !nextArg.startsWith("-")) {
-                    rawIgnoreFiles.push(nextArg);
+                    rawExcludeFiles.push(nextArg);
                     i++;
                 } else {
-                    console.error(`${colors.red}Error: -f flag requires a file name/pattern.${colors.reset}`);
+                    console.error(`${colors.red}Error: -xf flag requires a file name/pattern.${colors.reset}`);
                     process.exit(1);
                 }
             } else {
@@ -150,8 +150,8 @@ async function main() {
             console.log("Usage:");
             console.log("  node files.js <sha1File> [targetDir] [options]");
             console.log("\nOptions:");
-            console.log("  -d <pattern>   Ignore dir (e.g. 'config*', 'app/test*')");
-            console.log("  -f <pattern>   Ignore file (e.g. '*.js', 'src/*.log')");
+            console.log("  -xd, --exclude-dir <pattern>    Exclude dir  (e.g. 'app/test*')");
+            console.log("  -xf, --exclude-file <pattern>   Exclude file (e.g. 'app/*.log')");
             process.exit(1);
         }
 
@@ -163,10 +163,10 @@ async function main() {
         const parsed = path.parse(sha1FilePath);
         const sha1FileName = parsed.name;
 
-        const dirs = processIgnoreList(rawIgnoreDirs, targetDir);
-        const files = processIgnoreList(rawIgnoreFiles, targetDir);
+        const dirs = processExcludeList(rawExcludeDirs, targetDir);
+        const files = processExcludeList(rawExcludeFiles, targetDir);
 
-        const ignoreRules = {
+        const excludeRules = {
             dirNames: dirs.namePatterns,
             dirPaths: dirs.pathPatterns,
             fileNames: files.namePatterns,
@@ -186,18 +186,18 @@ async function main() {
         console.log(`${colors.cyan}Target directory:${colors.reset} ${targetDir}`);
         console.log(`${colors.cyan}Expected files in SHA1:${colors.reset} ${expectedFiles.length}\n`);
 
-        if (rawIgnoreDirs.length > 0) {
-            console.log(`${colors.cyan}Ignore Rules (Dir):${colors.reset}`);
-            rawIgnoreDirs.forEach((p) => console.log(`  - ${p}`));
+        if (rawExcludeDirs.length > 0) {
+            console.log(`${colors.cyan}Exclude Rules (Dir):${colors.reset}`);
+            rawExcludeDirs.forEach((p) => console.log(`  - ${p}`));
         }
-        if (rawIgnoreFiles.length > 0) {
-            console.log(`${colors.cyan}Ignore Rules (File):${colors.reset}`);
-            rawIgnoreFiles.forEach((p) => console.log(`  - ${p}`));
+        if (rawExcludeFiles.length > 0) {
+            console.log(`${colors.cyan}Exclude Rules (File):${colors.reset}`);
+            rawExcludeFiles.forEach((p) => console.log(`  - ${p}`));
         }
 
-        const ignoredLog = { dirs: [], files: [] };
+        const excludedLog = { dirs: [], files: [] };
 
-        const actualFiles = await getFileList(targetDir, targetDir, ignoreRules, ignoredLog);
+        const actualFiles = await getFileList(targetDir, targetDir, excludeRules, excludedLog);
 
         const expectedSet = new Set(expectedFiles);
         const actualSet = new Set(actualFiles);
@@ -210,15 +210,15 @@ async function main() {
         // --- REPORTS ---
         console.log(`\n${colors.gray}------------------------------------------------------------${colors.reset}`);
 
-        if (ignoredLog.dirs.length > 0 || ignoredLog.files.length > 0) {
-            if (ignoredLog.dirs.length > 0) {
+        if (excludedLog.dirs.length > 0 || excludedLog.files.length > 0) {
+            if (excludedLog.dirs.length > 0) {
                 console.log(`${colors.cyan}Folders Skipped:${colors.reset}`);
-                ignoredLog.dirs.forEach((d) => console.log(`  [DIR]  ${d}`));
+                excludedLog.dirs.forEach((d) => console.log(`  [DIR]  ${d}`));
             }
 
-            if (ignoredLog.files.length > 0) {
+            if (excludedLog.files.length > 0) {
                 console.log(`${colors.cyan}Files Skipped:${colors.reset}`);
-                ignoredLog.files.forEach((f) => console.log(`  [FILE] ${f}`));
+                excludedLog.files.forEach((f) => console.log(`  [FILE] ${f}`));
             }
             console.log("\n");
         }
