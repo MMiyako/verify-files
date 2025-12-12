@@ -6,6 +6,12 @@
     "bin": {
         "verify": "./bin/verify.js"
     },
+    "files": [
+        "bin/",
+        "lib/",
+        "package.json",
+        "README.md"
+    ],
     "repository": {
         "type": "git",
         "url": "git+https://github.com/MMiyako/verify-files.git"
