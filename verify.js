@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
-const { spawn } = require("child_process");
+const { fork } = require("child_process");
 const path = require("path");
-const fs = require("fs").promises;
 
-// Colors for terminal output
 const colors = {
     reset: "\x1b[0m",
     cyan: "\x1b[36m",
@@ -12,127 +10,61 @@ const colors = {
     yellow: "\x1b[33m",
     red: "\x1b[31m",
     gray: "\x1b[90m",
-    blue: "\x1b[34m",
-    magenta: "\x1b[35m",
 };
 
 function showHelp() {
     console.log(`
-${colors.cyan}Verify Tool - File and Checksum Verification${colors.reset}
+${colors.cyan}Usage:${colors.reset} verify <sha1_file> [target_directory] --mode
 
-${colors.cyan}Usage:${colors.reset}
-  verify [options] <sha1-file>
+${colors.yellow}You must specify a verification mode:${colors.reset}
 
-${colors.cyan}Options:${colors.reset}
-  -f, --files         Compare file list only
-  -c, --checksum      Verify checksums (default mode)
-  -h, --help          Show this help message
+  ${colors.green}--files, -f${colors.reset}      Verify file structure (Missing/Extra files)
+                   ${colors.cyan}Supports flags:${colors.reset} -xd (exclude dir), -xf (exclude file)
+  
+  ${colors.green}--checksum, -c${colors.reset}   Verify file integrity (Corrupt/Modified files)
 
 ${colors.cyan}Examples:${colors.reset}
-  verify -c ./base.sha1          Verify checksums
-  verify -f ./base.sha1          Verify file lists
-  verify ./base.sha1             Verify file lists (default)
+  verify list.sha1 ./app --files
+  verify list.sha1 ./app --checksum
+  verify list.sha1 ./app -f -xd "node_modules"
 `);
 }
 
-function parseArgs() {
+function main() {
+    // 1. Get arguments excluding 'node' and 'verify.js'
     const args = process.argv.slice(2);
-    const options = {
-        file: null,
-        mode: null,
-    };
 
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
+    // 2. Scan for mode flags
+    const isFilesMode = args.includes("--files") || args.includes("-f");
+    const isChecksumMode = args.includes("--checksum") || args.includes("-c");
 
-        if (arg === "-f" || arg === "--files") {
-            options.mode = "files";
-            if (args[i + 1] && !args[i + 1].startsWith("-")) {
-                options.file = args[i + 1];
-                i++;
-            }
-        } else if (arg === "-c" || arg === "--checksum") {
-            options.mode = "checksum";
-            if (args[i + 1] && !args[i + 1].startsWith("-")) {
-                options.file = args[i + 1];
-                i++;
-            }
-        } else if (arg === "-h" || arg === "--help") {
-            showHelp();
-            process.exit(0);
-        }
-    }
-
-    return options;
-}
-
-function runScript(scriptName, args = []) {
-    return new Promise((resolve, reject) => {
-        const scriptPath = path.join(__dirname, scriptName);
-        const child = spawn("node", [scriptPath, ...args], {
-            stdio: "inherit",
-        });
-
-        child.on("close", (code) => {
-            if (code === 0) {
-                resolve();
-            } else {
-                reject(new Error(`Script ${scriptName} exited with code ${code}`));
-            }
-        });
-
-        child.on("error", (error) => {
-            reject(error);
-        });
-    });
-}
-
-async function main() {
-    try {
-        const options = parseArgs();
-
-        // Validate arguments
-        if (!options.file) {
-            showHelp();
-            process.exit(1);
-        }
-
-        if (!options.mode) {
-            options.mode = "files";
-        }
-
-        // Check if file exists
-        try {
-            await fs.access(options.file);
-        } catch (error) {
-            console.error(`${colors.red}Error:${colors.reset} SHA1 file not found: ${options.file}`);
-            process.exit(1);
-        }
-
-        console.log(
-            `${colors.blue}Mode: ${options.mode === "files" ? "File List Verification" : "Checksum Verification"}${
-                colors.reset
-            }\n`
-        );
-
-        if (options.mode === "files") {
-            await runScript("files.js", [options.file]);
-        } else {
-            // For checksum mode, we need to pass the method
-            await runScript("checksum.js", [options.file]);
-        }
-
-        console.log(`\n${colors.green}Done!${colors.reset}`);
-    } catch (error) {
-        console.error(`${colors.red}Error:${colors.reset}`, error.message);
+    // 3. Validation: No mode or Both modes selected
+    if (!isFilesMode && !isChecksumMode) {
+        console.error(`\n${colors.red}Error: No mode specified.${colors.reset}`);
+        showHelp();
         process.exit(1);
     }
-}
 
-// Handle Ctrl+C
-process.on("SIGINT", () => {
-    console.log("\n\nVerification interrupted by user");
-    process.exit(0);
-});
+    if (isFilesMode && isChecksumMode) {
+        console.error(`\n${colors.red}Error: Please select only one mode at a time.${colors.reset}`);
+        process.exit(1);
+    }
+
+    // 4. Determine script to run
+    const scriptToRun = isFilesMode ? "files.js" : "checksum.js";
+    const scriptPath = path.join(__dirname, scriptToRun);
+
+    // 5. Filter out the mode flags to create the child argument list
+    // We keep everything else (sha1 file, target dir, -xd, -xf, etc.)
+    const childArgs = args.filter((arg) => !["--files", "-f", "--checksum", "-c"].includes(arg));
+
+    // 6. Execute the script
+    // 'fork' runs the module as a child process using the same V8 instance
+    const child = fork(scriptPath, childArgs);
+
+    child.on("exit", (code) => {
+        process.exit(code);
+    });
+}
 
 main();
