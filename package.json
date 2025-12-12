@@ -1,0 +1,20 @@
+{
+    "name": "verify-files",
+    "version": "1.0.0",
+    "description": "A tool for verifying file lists and checksums",
+    "main": "verify.js",
+    "bin": {
+        "verify": "./bin/verify.js"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/MMiyako/verify-files.git"
+    },
+    "keywords": [],
+    "author": "MMiyako",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/MMiyako/verify-files/issues"
+    },
+    "homepage": "https://github.com/MMiyako/verify-files#readme"
+}

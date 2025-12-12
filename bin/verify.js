@@ -52,7 +52,7 @@ function main() {
 
     // 4. Determine script to run
     const scriptToRun = isFilesMode ? "files.js" : "checksum.js";
-    const scriptPath = path.join(__dirname, scriptToRun);
+    const scriptPath = path.join(__dirname, "../lib", scriptToRun);
 
     // 5. Filter out the mode flags to create the child argument list
     // We keep everything else (sha1 file, target dir, -xd, -xf, etc.)
